@@ -231,7 +231,7 @@ class FoamMesh(object):
         return None
 
     @classmethod
-    def parse_faces_content(cls, content, is_binary, skip=10):
+    def _parse_faces_content(cls, content, is_binary, skip=10):
         """
         parse faces from content
         :param content: file contents
@@ -248,6 +248,20 @@ class FoamMesh(object):
             n += 1
         if num < 0:
             return None
+        # print(len(content))
+        # print(len(content[n + 2:n + 2 + num]))
+        # print((content[n + 2]))
+        # print((content[n + 2 + num]))
+        # print(n, num)
+        # exit()
+        # for i, ln in enumerate(content[n + 2:n + 2 + num]):
+        #     ln_s = ln.strip()
+        #     print(i, ln_s)
+        #     print(ln_s[0])
+        #     if not int(ln_s[0]):
+        #         print(f'warning, line {i}: {ln_s}')
+        #         exit()
+        # exit()
         if not is_binary:
             return [[int(s) for s in re.findall(b"\d+", ln)[1:]] for ln in content[n + 2:n + 2 + num]]
         n2 = n + 1
@@ -264,6 +278,80 @@ class FoamMesh(object):
         pp = struct.unpack('{}i'.format(idx[-1]), buf[disp:disp+idx[-1]*struct.calcsize('i')])
         data = [pp[idx[i]:idx[i+1]] for i in range(num - 1)]
         return data
+    
+    def parse_faces_content(self, content, is_binary, skip=10):
+        # ASCII only
+        if is_binary:
+            raise NotImplementedError("binary parsing ignored")
+
+        # Find the declared number of faces (first line that is just an integer)
+        n = skip
+        num = None
+        while n < len(content):
+            s = content[n].strip()
+            if s.isdigit():
+                num = int(s)
+                break
+            n += 1
+        if num is None:
+            return None
+
+        # Find the opening "(" of the big faces list
+        n += 1
+        while n < len(content) and content[n].strip() != b"(":
+            n += 1
+        n += 1  # move to first line inside the list
+
+        faces = []
+        need = None      # how many verts the current face needs
+        cur = []         # accumulating vertex indices for the current face
+
+        int_re = re.compile(rb"-?\d+")
+
+        # Parse until we collect exactly `num` faces
+        while n < len(content) and len(faces) < num:
+            line = content[n]
+            n += 1
+
+            # Remove // comments
+            if b"//" in line:
+                line = line.split(b"//", 1)[0]
+
+            s = line.strip()
+            if not s:
+                continue
+            # Ignore pure paren lines (these occur in multi-line faces)
+            if s == b"(" or s == b")":
+                continue
+
+            ints = [int(x) for x in int_re.findall(line)]
+            if not ints:
+                continue
+
+            k = 0
+            while k < len(ints):
+                if need is None:
+                    # start a new face
+                    need = ints[k]
+                    cur = []
+                    k += 1
+                    if need < 0:
+                        raise ValueError(f"Bad face size {need}")
+                    # then consume indices (maybe on same line)
+                take = min(need - len(cur), len(ints) - k)
+                cur.extend(ints[k:k+take])
+                k += take
+
+                if len(cur) == need:
+                    faces.append(cur)
+                    need = None
+                    cur = []
+
+        if len(faces) != num:
+            raise ValueError(f"Parsed {len(faces)} faces, expected {num}")
+
+        return faces
+
 
     @classmethod
     def parse_boundary_content(cls, content, is_binary=None, skip=10):
